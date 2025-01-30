@@ -3,17 +3,11 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
 import models
 from database import engine, SessionLocal
-from celery_worker import log_access
-import openai
+from celery_worker import log_access, update_tone_and_sentiment
 from pydantic import BaseModel
 from datetime import datetime
-from celery import Celery
-
-
-openai.api_key = 'OPEN-AI-KEY'
 
 app = FastAPI()
-celery_app = Celery("tasks", broker="redis://localhost:6379/0")
 
 models.Base.metadata.create_all(bind=engine)
 
@@ -36,41 +30,6 @@ class ReviewCreate(BaseModel):
     tone: str = None
     sentiment: str = None
 
-@celery_app.task
-def log_access(endpoint: str):
-    db = SessionLocal()
-    log_entry = models.AccessLog(text=endpoint)
-    db.add(log_entry)
-    db.commit()
-    db.close()
-
-
-def get_tone_and_sentiment(review_text, stars):
-    prompt = f"""
-    Review: "{review_text}"
-    Rating: {stars} stars
-
-    Please determine the tone of the review (e.g., positive, negative, neutral) and the sentiment (e.g., positive, negative, neutral).
-    """
-
-    response = openai.Completion.create(
-        model="gpt-4",
-        prompt=prompt,
-        max_tokens=100,
-        temperature=0.7
-    )
-
-    analysis = response.choices[0].text.strip()
-
-    tone = None
-    sentiment = None
-    if "tone" in analysis and "sentiment" in analysis:
-        parts = analysis.split("Sentiment:")
-        tone = parts[0].replace("Tone:", "").strip()
-        sentiment = parts[1].strip() if len(parts) > 1 else None
-
-    return tone, sentiment
-
 @app.get("/reviews/trends")
 def get_review_trends(db: Session = Depends(get_db)):
     latest_reviews = (
@@ -80,28 +39,16 @@ def get_review_trends(db: Session = Depends(get_db)):
     )
     print("Latest Reviews ", latest_reviews)
 
-    total_reviews_per_category = (
-        db.query(
-            models.ReviewHistory.category_id,
-            func.count(models.ReviewHistory.id).label("total_review")
-        )
-        .group_by(models.ReviewHistory.category_id)
-        .subquery()
-    )
-
-    print("total_reviews_per_category ", total_reviews_per_category)
-
     category_stats = (
         db.query(
             models.Category.id.label("id"),
             models.Category.name.label("name"),
             models.Category.description.label("description"),
             func.avg(models.ReviewHistory.stars).label("average_star"),
-            total_reviews_per_category.c.total_review
+            func.count(models.ReviewHistory.id).label("total_review")
         )
         .join(models.ReviewHistory, models.Category.id == models.ReviewHistory.category_id)
         .join(latest_reviews, models.ReviewHistory.id == latest_reviews.c.latest_id)
-        .join(total_reviews_per_category, models.Category.id == total_reviews_per_category.c.category_id)
         .group_by(models.Category.id)
         .order_by(desc("average_star"))
         .limit(5)
@@ -124,7 +71,6 @@ def get_review_trends(db: Session = Depends(get_db)):
     log_access.delay("GET /reviews/trends")
 
     return result
-
 
 @app.get("/reviews/")
 def get_reviews(
@@ -159,15 +105,13 @@ def get_reviews(
 
     reviews = query.limit(15).all()
 
-    result = []
     for review in reviews:
         if not review.tone or not review.sentiment:
-            tone, sentiment = get_tone_and_sentiment(review.text, review.stars)
-            review.tone = tone
-            review.sentiment = sentiment
-            db.commit()
+            update_tone_and_sentiment.delay(review.id, review.text, review.stars)
 
-        result.append({
+
+    result = [
+        {
             "id": review.id,
             "text": review.text,
             "stars": review.stars,
@@ -176,7 +120,9 @@ def get_reviews(
             "tone": review.tone,
             "sentiment": review.sentiment,
             "category_id": review.category_id,
-        })
+        }
+        for review in reviews
+    ]
 
     log_access.delay(f"GET /reviews/?category_id={category_id}")
 

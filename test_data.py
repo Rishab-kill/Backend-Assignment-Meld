@@ -2,10 +2,8 @@ from database import SessionLocal
 from models import ReviewHistory, Category, AccessLog
 from datetime import datetime
 
-# Get the database session
 db = SessionLocal()
 
-# Create sample categories
 category1 = Category(name="Electronics", description="Electronic gadgets")
 category2 = Category(name="Books", description="Books collection")
 category3 = Category(name="Fashion", description="Clothing & accessories")
@@ -15,7 +13,6 @@ category5 = Category(name="Beauty", description="Beauty & self-care")
 db.add_all([category1, category2, category3, category4, category5])
 db.commit()
 
-# Create sample reviews with different versions
 review1_v1 = ReviewHistory(text="Good product", stars=8, review_id="R1", category_id=category1.id, created_at=datetime.utcnow(), updated_at=datetime.utcnow())
 review1_v2 = ReviewHistory(text="Excellent", stars=9, review_id="R1", category_id=category1.id, created_at=datetime.utcnow(), updated_at=datetime.utcnow())
 review1_v3 = ReviewHistory(text="Excellent", stars=10, review_id="R6", category_id=category1.id, created_at=datetime.utcnow(), updated_at=datetime.utcnow())
@@ -38,7 +35,6 @@ review5_v5 = ReviewHistory(text="Amazing5", stars=4, review_id="R5", category_id
 db.add_all([review1_v1, review1_v2, review2_v1, review3_v1, review3_v2, review4_v1, review5_v1, review5_v2, review5_v3, review5_v4, review5_v5])
 db.commit()
 
-# Insert AccessLog entry
 log_entry = AccessLog(text="Testing data insertion")
 db.add(log_entry)
 db.commit()
